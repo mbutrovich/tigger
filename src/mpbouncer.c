@@ -224,6 +224,36 @@ void add_socket_to_sockmap(PgSocket *const socket, enum socket_type type) {
 					if (ret >= 0) {
 					  log_info("Updated server port %u to use udp %u and tcp %u.", server_port, udp_port, sport);
 					  close(mirror_ports_fd);
+
+					  {
+						int socket_states = bpf_obj_get("/sys/fs/bpf/socket_states");
+
+						if (socket_states >= 0) {
+						  MPSocketState socket_state;
+
+						  ret = bpf_map_lookup_elem(socket_states, &sport, &socket_state);
+						  if (ret < 0) {
+							log_error("Failed to get socket %u in socket_states.\n", sport);
+							return;
+						  } else {
+							log_noise("Got socket %u in socket_states.\n", sport);
+						  }
+						  socket_state.sink_ = server_port;
+						  ret = bpf_map_update_elem(mirror_ports_fd, &sport, &socket_state, BPF_ANY);
+
+						  if (ret >= 0) {
+
+							log_noise("mirror BPF port %u is to linked primary BPF socket: %u\n",
+									  sport,
+									  socket_state.sink_);
+						  } else {
+							log_error("Failed to update mirror BPF port %u in socket_states map.", sport);
+						  }
+
+						  close(socket_states);
+						}
+					  }
+
 					  return;
 					} else {
 					  log_error("Failed to update server port %u in mirror_ports map.", server_port);

@@ -4,8 +4,35 @@
 
 const volatile int pooling_mode = SESSION_POOLING;
 
+const char ERROR_RESPONSE[44] = {
+    'E',                                                                                     // Error
+    0,   0,   0,   37,                                                                       // Length
+    'S', 'E', 'R', 'R', 'O', 'R', 0,                                                         // Severity
+    'C', '0', '3', '0', '0', '0', 0,                                                         // Code
+    'M', 'P', 'r', 'o', 'x', 'y', ' ', 'n', 'o', 't', ' ', 'r', 'e', 'a', 'd', 'y', '.', 0,  // Message
+    0,                                                                                       // Empty field
+    'Z',                                                                                     // Ready for query
+    0,   0,   0,   5,                                                                        // Length
+    'I'                                                                                      // Idle
+};
+
+static int64_t change_to_error_response(struct __sk_buff *const skb) {
+  const int32_t len_diff = 44 - skb->len;
+  // bpf_printk("len_diff: %d", len_diff);
+  int64_t result = bpf_skb_adjust_room(skb, len_diff, 0, 0);
+  if (result < 0) {
+    // bpf_printk("Failed to change tail of skb.");
+    return result;
+  }
+  result = bpf_skb_store_bytes(skb, 0, ERROR_RESPONSE, 44, 0);
+  if (result < 0) {
+    // bpf_printk("Failed to write error response.");
+  }
+  return result;
+}
+
 static bool process_client(struct __sk_buff *const skb, SocketState *const client_socket_state) {
-  // bpf_printk("\n process_client");
+  // // bpf_printk("\n process_client");
   const uint32_t skb_length = skb->len;
   uint32_t offset = 0;
 
@@ -16,13 +43,13 @@ static bool process_client(struct __sk_buff *const skb, SocketState *const clien
   if (client_socket_state->offset_ > 0) {
     // We have a leftover offset from the last buffer, so start our message processing there.
     offset = client_socket_state->offset_;
-    // bpf_printk("retrieved offset: %u", offset);
+    // // bpf_printk("retrieved offset: %u", offset);
     // We "consumed" this offset so reset it to 0.
     client_socket_state->offset_ = 0;
   } else if (client_socket_state->offset_ < 0) {
     // We have a partial header. Read it into stack header.
     const int64_t partial_offset = client_socket_state->offset_;
-    // bpf_printk("finish partial header read with partial_offset: %d", partial_offset);
+    // // bpf_printk("finish partial header read with partial_offset: %d", partial_offset);
 
     switch (partial_offset) {
       case -4:
@@ -51,35 +78,35 @@ static bool process_client(struct __sk_buff *const skb, SocketState *const clien
 
     //    char query_type[2] = {header->type_, 0};
 
-    // bpf_printk("split header query type: %s", query_type);
-    // bpf_printk("split header query length: %u", bpf_ntohl(header->length_));
+    // // bpf_printk("split header query type: %s", query_type);
+    // // bpf_printk("split header query length: %u", bpf_ntohl(header->length_));
 
     if (header->type_ == 'X') {
-      bpf_printk("Retrieved a split header for a disconnect message.");
+      // bpf_printk("Retrieved a split header for a disconnect message.");
       // TODO(Matt): Check if type is 'X', if yes -> extend front of packet, prepend header, and don't redirect.
     }
 
     // Move our offset to look for the next message.
     offset += sizeof(char) + bpf_ntohl(header->length_) + partial_offset;
 
-    // bpf_printk("offset after split header: %u", offset);
+    // // bpf_printk("offset after split header: %u", offset);
   }
 
   uint16_t messages = 0;
   do {
-    // bpf_printk("offset: %u", offset);
-    // bpf_printk("skb_length: %u", skb_length);
+    // // bpf_printk("offset: %u", offset);
+    // // bpf_printk("skb_length: %u", skb_length);
 
     if (offset > skb_length) {
       // The offset is past this buffer's length. Stash the difference as the starting point for the next buffer.
       client_socket_state->offset_ = offset - skb_length;
-      // bpf_printk("stashing offset_map_val: %d", client_socket_state->offset_);
+      // // bpf_printk("stashing offset_map_val: %d", client_socket_state->offset_);
       return true;
     }
 
     if (offset == skb_length) {
       // This buffer is complete.
-      // bpf_printk("done with this buffer");
+      // // bpf_printk("done with this buffer");
       return true;
     }
 
@@ -89,7 +116,7 @@ static bool process_client(struct __sk_buff *const skb, SocketState *const clien
     if (skb_length - offset < sizeof(PostgresMessageHeader)) {
       // We can't do a full header read.
       const uint8_t remaining_bytes = skb_length - offset;
-      // bpf_printk("start partial header read with remaining bytes: %u", remaining_bytes);
+      // // bpf_printk("start partial header read with remaining bytes: %u", remaining_bytes);
 
       switch (remaining_bytes) {
         case 4: {
@@ -118,7 +145,7 @@ static bool process_client(struct __sk_buff *const skb, SocketState *const clien
         }
       }
       if (client_socket_state->split_header_[0] == 'X') {
-        bpf_printk("Got a split header for a disconnect message.");
+        // bpf_printk("Got a split header for a disconnect message.");
         // TODO(Matt): Check if type is 'X', if yes -> truncate and forward.
       }
       return true;
@@ -130,8 +157,8 @@ static bool process_client(struct __sk_buff *const skb, SocketState *const clien
 
     //    char query_type[2] = {header->type_, 0};
 
-    // bpf_printk("query type: %s", query_type);
-    // bpf_printk("query length: %u", bpf_ntohl(header->length_));
+    // // bpf_printk("query type: %s", query_type);
+    // // bpf_printk("query length: %u", bpf_ntohl(header->length_));
 
     if (header->type_ == 'X') {
       // Client wants to disconnect. Don't redirect this buffer.
@@ -190,6 +217,30 @@ int32_t _mp_client(struct __sk_buff *const skb) {
     const uint32_t server_socket_key = client_socket_state->sink_;
 
     if (redirect) {
+      {
+        // See if we're ready to proceed.
+        MirrorResponses *responses = bpf_map_lookup_elem(&mirror_responders, &server_socket_key);
+
+        if (!responses) {
+          // bpf_printk("no server socket state.");
+          // This shouldn't happen, but it keeps the verifier happy.
+          return SK_DROP;
+        }
+
+        bpf_spin_lock(&(responses->lock_));
+
+        if (responses->wait_) {
+          // We're waiting for a server to respond.
+          bpf_spin_unlock(&(responses->lock_));
+
+          change_to_error_response(skb);
+          bpf_sk_redirect_map(skb, &client_sockets, client_socket_key, 0);
+
+          return SK_PASS;
+        }
+        bpf_spin_unlock(&(responses->lock_));
+      }
+
       // bpf_printk("bouncing to %u", server_socket_key);
       bpf_sk_redirect_map(skb, &server_sockets, server_socket_key, 0);
     } else {

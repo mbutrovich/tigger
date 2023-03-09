@@ -70,7 +70,7 @@ int32_t tc_test(struct __sk_buff *const skb) {
   // Pass any packets that have no payload. These are likely SYN, ACK, SYN/ACK etc. packets.
   const uint16_t iph_tot_len = bpf_ntohs(iph->tot_len);
   if (ip_header_size + tcp_header_size == iph_tot_len) {
-    //    bpf_printk("Got a packet without a TCP payload.");
+    //    // bpf_printk("Got a packet without a TCP payload.");
     return BPF_OK;
   }
 

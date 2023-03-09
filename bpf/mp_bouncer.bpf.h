@@ -50,6 +50,18 @@ struct {
   __uint(max_entries, 65536);
 } idle_server_sockets SEC(".maps");
 
+typedef struct {
+  struct bpf_spin_lock lock_;
+  bool wait_;
+} MirrorResponses;
+
+struct {
+  __uint(type, BPF_MAP_TYPE_ARRAY);
+  __type(key, u32);
+  __type(value, MirrorResponses);
+  __uint(max_entries, 65536);
+} mirror_responders SEC(".maps");
+
 enum {
   MAX_MESSAGES = 2048  // Arbitrary limit to make the verifier happy. I had to raise this from 255 to make pg_dump happy
                        // since it sends a lot of stuff back in a single buffer sometimes.
