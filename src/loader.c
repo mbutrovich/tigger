@@ -21,6 +21,7 @@
  */
 
 #include "bouncer.h"
+#include "objects.h"
 
 #include <usual/fileutil.h>
 
@@ -173,6 +174,7 @@ bool parse_database(void *base, const char *name, const char *connstr)
 	char *timezone = NULL;
 	char *connect_query = NULL;
 	char *appname = NULL;
+	PgDatabase *mirror_db = NULL;
 
 	cv.value_p = &pool_mode;
 	cv.extra = (const void *)pool_mode_map;
@@ -249,6 +251,12 @@ bool parse_database(void *base, const char *name, const char *connstr)
 			}
 		} else if (strcmp("application_name", key) == 0) {
 			appname = val;
+		} else if (strcmp("mirror", key) == 0) {
+		  mirror_db = find_database(val);
+		  if (!mirror_db) {
+			log_error("database %s specified a mirror database %s that doesn't exist.", dbname, val);
+			goto fail;
+		  }
 		} else {
 			log_error("unrecognized connection parameter: %s", key);
 			goto fail;
@@ -356,6 +364,10 @@ bool parse_database(void *base, const char *name, const char *connstr)
 
 	/* remember dbname */
 	db->dbname = (char *)msg->buf + dbname_ofs;
+
+	if (mirror_db) {
+	  db->mirror = mirror_db;
+	}
 
 	free(tmp_connstr);
 	return true;

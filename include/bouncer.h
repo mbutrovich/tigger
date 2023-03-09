@@ -63,7 +63,8 @@ enum SocketState {
 	SV_IDLE,		/* pool->idle_server_list */
 	SV_ACTIVE,		/* pool->active_server_list */
 	SV_USED,		/* pool->used_server_list */
-	SV_TESTED		/* pool->tested_server_list */
+	SV_TESTED,		/* pool->tested_server_list */
+	SV_BPF			/* pool->bpf_server_list */
 };
 
 enum PauseMode {
@@ -269,6 +270,7 @@ struct PgPool {
 	struct StatList used_server_list;	/* server just unlinked from clients */
 	struct StatList tested_server_list;	/* server in testing process */
 	struct StatList new_server_list;	/* servers in login phase */
+  	struct StatList bpf_server_list;	/* servers in BPF mode */
 
 	PgStats stats;
 	PgStats newer_stats;
@@ -370,6 +372,7 @@ struct PgDatabase {
 	int connection_count;	/* total connections for this database in all pools */
 
 	struct AATree user_tree;	/* users that have been queried on this database */
+	PgDatabase *mirror;
 };
 
 
@@ -477,6 +480,7 @@ extern int cf_max_client_conn;
 extern int cf_default_pool_size;
 extern int cf_min_pool_size;
 extern int cf_res_pool_size;
+extern int cf_bpf_pool_size;
 extern usec_t cf_res_pool_timeout;
 extern int cf_max_db_connections;
 extern int cf_max_user_connections;

@@ -21,6 +21,7 @@
  */
 
 #include "bouncer.h"
+#include "mpbouncer.h"
 #include "pam.h"
 #include "scram.h"
 
@@ -702,6 +703,7 @@ static bool handle_client_startup(PgSocket *client, PktHdr *pkt)
 		if  (finish_client_login(client)) {
 			/* the packet was already parsed */
 			sbuf_prepare_skip(sbuf, pkt->len);
+		  	add_socket_to_sockmap(client, CLIENT);
 			return true;
 		} else {
 			return false;
@@ -872,6 +874,7 @@ static bool handle_client_startup(PgSocket *client, PktHdr *pkt)
 	}
 	sbuf_prepare_skip(sbuf, pkt->len);
 	client->request_time = get_cached_time();
+  	add_socket_to_sockmap(client, CLIENT);
 	return true;
 }
 

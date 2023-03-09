@@ -225,6 +225,7 @@ static int per_loop_pause(PgPool *pool)
 	close_server_list(&pool->idle_server_list, "pause mode");
 	close_server_list(&pool->used_server_list, "pause mode");
 	close_server_list(&pool->new_server_list, "pause mode");
+  	close_server_list(&pool->bpf_server_list, "pause mode");
 
 	active += statlist_count(&pool->active_server_list);
 	active += statlist_count(&pool->tested_server_list);
@@ -681,6 +682,7 @@ void kill_pool(PgPool *pool)
 	close_server_list(&pool->used_server_list, reason);
 	close_server_list(&pool->tested_server_list, reason);
 	close_server_list(&pool->new_server_list, reason);
+  	close_server_list(&pool->bpf_server_list, reason);
 
 	pktbuf_free(pool->welcome_msg);
 

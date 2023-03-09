@@ -21,6 +21,7 @@
  */
 
 #include "bouncer.h"
+#include "mpbouncer.h"
 
 static bool load_parameter(PgSocket *server, PktHdr *pkt, bool startup)
 {
@@ -225,6 +226,12 @@ int pool_res_pool_size(PgPool *pool)
 		return pool->db->res_pool_size;
 }
 
+int pool_bpf_pool_size(PgPool *pool)
+{
+  // TODO(Matt): Maybe this will be pool-specific eventually?
+  return cf_bpf_pool_size;
+}
+
 int database_max_connections(PgDatabase *db)
 {
 	if (db->max_db_connections <= 0) {
@@ -415,6 +422,10 @@ static bool handle_server_work(PgSocket *server, PktHdr *pkt)
 						/* XXX This happens during takeover if the new process
 						 * continues a transaction. */
 						slog_warning(client, "FIXME: transaction end, but xact_start == 0");
+					}
+
+					if (pool_pool_mode(server->pool) == POOL_TX) {
+					  	add_socket_to_sockmap(client, CLIENT);
 					}
 				}
 			}
@@ -610,6 +621,7 @@ bool server_proto(SBuf *sbuf, SBufEvent evtype, struct MBuf *data)
 			default:
 				slog_warning(server, "EV_FLUSH with state=%d", server->state);
 			case SV_IDLE:
+			case SV_BPF:
 				break;
 			}
 		}

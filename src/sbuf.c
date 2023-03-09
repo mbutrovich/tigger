@@ -651,6 +651,8 @@ static bool sbuf_actual_recv(SBuf *sbuf, size_t len)
 		len = avail;
 	got = sbuf_op_recv(sbuf, dst, len);
 	if (got > 0) {
+	  	/* Got a good read, so reset the EAGAIN count. */
+	  	sbuf->eagain_recv_count = 0;
 		io->recv_pos += got;
 	} else if (got == 0) {
 		/* eof from socket */
@@ -660,6 +662,23 @@ static bool sbuf_actual_recv(SBuf *sbuf, size_t len)
 		/* some error occurred */
 		sbuf_call_proto(sbuf, SBUF_EV_RECV_FAILED);
 		return false;
+	} else if (got < 0 && errno == EAGAIN) {
+	  /* This is a workaround for a rare (1 in 1000s?) bug where a disconnecting client has sent 'X', the BPF  layer
+	   * sees that and passes it to userspace, which wakes the epoll_wait() call with an EPOLLIN event, but the recv()
+	   * always returns -1 with an EAGAIN errno. Normally this just means you should read the nonblocking socket again,
+	   * but the recv() never succeeds. Since I've only seen this bug with disconnecting clients, I'm hacking this
+	   * workaround to just disconnect the socket after 255 failed recv() calls. It's not elegant, but it should work to
+	   * get experiment results. Fully understanding it would require looking into kernel code to understand how a
+	   * socket buffer passed from the sockmap layer is getting stuck never passing to recv() but it's far enough along
+	   * to constantly keep EPOLLIN active. */
+	  if (sbuf->eagain_recv_count == UINT8_MAX) {
+		/* We hit a ton of EAGAINs on recv(). Disconnect this socket. */
+		sbuf_call_proto(sbuf, SBUF_EV_RECV_FAILED);
+		return false;
+	  } else {
+		/* We might be in a bad state. Start counting the EAGAINs. */
+		sbuf->eagain_recv_count++;
+	  }
 	}
 	return true;
 }

@@ -21,6 +21,7 @@
  */
 
 #include "bouncer.h"
+#include "mpbouncer.h"
 #include "scram.h"
 
 #include <usual/err.h>
@@ -147,6 +148,8 @@ void change_client_state(PgSocket *client, SocketState newstate)
 {
 	PgPool *pool = client->pool;
 
+	log_noise("client %d: %u %u\n", ntohs(client->remote_addr.sin.sin_port), client->state, newstate);
+
 	/* remove from old location */
 	switch (client->state) {
 	case CL_FREE:
@@ -211,6 +214,8 @@ void change_server_state(PgSocket *server, SocketState newstate)
 {
 	PgPool *pool = server->pool;
 
+  	log_noise("server %d: %u %u\n", ntohs(server->local_addr.sin.sin_port), server->state, newstate);
+
 	/* remove from old location */
 	switch (server->state) {
 	case SV_FREE:
@@ -232,6 +237,9 @@ void change_server_state(PgSocket *server, SocketState newstate)
 		break;
 	case SV_ACTIVE:
 		statlist_remove(&pool->active_server_list, &server->head);
+		break;
+	  case SV_BPF:
+		statlist_remove(&pool->bpf_server_list, &server->head);
 		break;
 	default:
 		fatal("bad old server state: %d", server->state);
@@ -269,6 +277,9 @@ void change_server_state(PgSocket *server, SocketState newstate)
 		break;
 	case SV_ACTIVE:
 		statlist_append(&pool->active_server_list, &server->head);
+		break;
+	case SV_BPF:
+	  	statlist_append(&pool->bpf_server_list, &server->head);
 		break;
 	default:
 		fatal("bad server state: %d", server->state);
@@ -511,6 +522,7 @@ static PgPool *new_pool(PgDatabase *db, PgUser *user)
 	statlist_init(&pool->idle_server_list, "idle_server_list");
 	statlist_init(&pool->tested_server_list, "tested_server_list");
 	statlist_init(&pool->used_server_list, "used_server_list");
+  	statlist_init(&pool->bpf_server_list, "bpf_server_list");
 	statlist_init(&pool->new_server_list, "new_server_list");
 	statlist_init(&pool->cancel_req_list, "cancel_req_list");
 
@@ -666,6 +678,9 @@ bool find_server(PgSocket *client)
 
 	/* link or send to waiters list */
 	if (server) {
+
+	  	remove_socket_from_sockmap(client, CLIENT);
+
 		client->link = server;
 		server->link = client;
 		change_server_state(server, SV_ACTIVE);
@@ -795,6 +810,10 @@ bool release_server(PgSocket *server)
 		return false;
 	}
 
+	if (statlist_count(&(pool)->bpf_server_list) < pool_bpf_pool_size(pool)) {
+	  	newstate = SV_BPF;
+	}
+
 	Assert(server->link == NULL);
 	slog_noise(server, "release_server: new state=%d", newstate);
 	change_server_state(server, newstate);
@@ -804,6 +823,8 @@ bool release_server(PgSocket *server)
 		return reuse_on_release(server);
 	} else if (newstate == SV_TESTED) {
 		return reset_on_release(server);
+	} else if (newstate == SV_BPF) {
+		add_socket_to_sockmap(server, SERVER);
 	}
 
 	return true;
@@ -853,6 +874,9 @@ void disconnect_server(PgSocket *server, bool send_term, const char *reason, ...
 	case SV_TESTED:
 	case SV_USED:
 	case SV_IDLE:
+		break;
+	case SV_BPF:
+		remove_socket_from_sockmap(server, SERVER);
 		break;
 	case SV_LOGIN:
 		/*
@@ -914,6 +938,8 @@ void disconnect_server(PgSocket *server, bool send_term, const char *reason, ...
 void disconnect_client(PgSocket *client, bool notify, const char *reason, ...)
 {
 	usec_t now = get_cached_time();
+
+  	remove_socket_from_sockmap(client, CLIENT);
 
 	if (reason) {
 		char buf[128];
@@ -1237,6 +1263,11 @@ void launch_new_connection(PgPool *pool)
 		goto force_new;
 	}
 
+	if (statlist_count(&(pool)->bpf_server_list) <= pool_bpf_pool_size(pool)) {
+	  	log_debug("launch_new_connection: bypass pool limitations for bpf list");
+	  	goto force_new;
+	}
+
 	/* is it allowed to add servers? */
 	if (max >= pool_pool_size(pool) && pool->welcome_msg_ready) {
 		/* should we use reserve pool? */
@@ -1421,8 +1452,16 @@ found:
 		return;
 	}
 
+  	if (main_client->link) {
+		/* This client has a userspace link to a server socket. */
+		server = main_client->link;
+	} else {
+		/* Check if this client has a link to a BPF socket. */
+		server = get_client_link(main_client);
+	}
+
 	/* not linked client, just drop it then */
-	if (!main_client->link) {
+	if (!server) {
 		/* let administrative cancel be handled elsewhere */
 		if (main_client->pool->db->admin) {
 			disconnect_client(req, false, "cancel request for console client");
@@ -1440,7 +1479,6 @@ found:
 		log_noise("sbuf_close failed, retry later");
 
 	/* remember server key */
-	server = main_client->link;
 	memcpy(req->cancel_key, server->cancel_key, 8);
 
 	/* attach to target pool */
